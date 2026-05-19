@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bodycam Control Center</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Leaflet Map CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <!-- Hls.js Library -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12/dist/hls.min.js"></script>
+    <!-- Leaflet Map JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --panel-bg: rgba(17, 24, 39, 0.7);
+            --panel-border: rgba(255, 255, 255, 0.08);
+            --accent: #2563eb;
+            --accent-glow: rgba(37, 99, 235, 0.4);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --success: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ────────────────────────────────────────────────────────── */
+        header {
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--panel-border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+        }
+
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            background: linear-gradient(to right, #3b82f6, #60a5fa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-badge {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--success);
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--success);
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
+
+        /* ── Main Layout ────────────────────────────────────────────────────── */
+        .container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        sidebar {
+            width: 320px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(8px);
+            border-right: 1px solid var(--panel-border);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--panel-border);
+        }
+
+        .device-list {
+            list-style: none;
+        }
+
+        .device-item {
+            padding: 1rem;
+            border-bottom: 1px solid var(--panel-border);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .device-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .device-item.active {
+            background: rgba(37, 99, 235, 0.1);
+            border-left: 4px solid var(--accent);
+        }
+
+        .device-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .device-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Main Workspace */
+        .workspace {
+            flex: 1;
+            display: grid;
+            grid-template-rows: 1fr 1fr;
+            overflow: hidden;
+        }
+
+        .workspace-panel {
+            border-bottom: 1px solid var(--panel-border);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .panel-header {
+            background: rgba(15, 23, 42, 0.4);
+            padding: 0.75rem 1.5rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border-bottom: 1px solid var(--panel-border);
+            color: var(--text-muted);
+        }
+
+        /* Video Player Panel */
+        .player-container {
+            flex: 1;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .player-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--text-muted);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        /* GPS Map Panel */
+        #map {
+            flex: 1;
+            width: 100%;
+        }
+
+        /* Stats Overlay on Map */
+        .map-stats {
+            position: absolute;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid var(--panel-border);
+            backdrop-filter: blur(12px);
+            padding: 1rem;
+            border-radius: 8px;
+            z-index: 1000;
+            width: 260px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.8rem;
+        }
+
+        .stat-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+        }
+
+        .stat-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1><span>🎥</span> Bodycam Control Center</h1>
+        <div class="status-badge">
+            <span class="status-dot"></span> Gateway Active
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Sidebar: Active Device Registry -->
+        <sidebar>
+            <div class="sidebar-header">Connected Bodycameras</div>
+            <ul class="device-list" id="deviceList">
+                <li class="no-data">Scanning for active devices...</li>
+            </ul>
+        </sidebar>
+
+        <!-- Workspace: Video Player & GPS Tracking -->
+        <div class="workspace">
+            <!-- Video Ingest Panel -->
+            <div class="workspace-panel">
+                <div class="panel-header" id="playerTitle">Live Stream Player</div>
+                <div class="player-container">
+                    <video id="videoPlayer" controls autoplay muted playsinline></video>
+                    <div class="player-overlay" id="playerOverlay">
+                        <h3>No Stream Selected</h3>
+                        <p>Select an active bodycam from the sidebar to view feed</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Telemetry GPS Tracking Panel -->
+            <div class="workspace-panel">
+                <div class="panel-header">GPS Realtime Map</div>
+                <div id="map"></div>
+                
+                <!-- Stats Overlay -->
+                <div class="map-stats" id="mapStats" style="display: none;">
+                    <div class="stat-row">
+                        <span class="stat-label">Device ID</span>
+                        <span class="stat-val" id="statDeviceId">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Latitude</span>
+                        <span class="stat-val" id="statLat">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Longitude</span>
+                        <span class="stat-val" id="statLon">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Speed</span>
+                        <span class="stat-val" id="statSpeed">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Heading</span>
+                        <span class="stat-val" id="statHeading">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Last Sync</span>
+                        <span class="stat-val" id="statTime">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Init Leaflet Map (Default coordinates centered globally)
+        const map = L.map('map', {
+            zoomControl: true,
+            attributionControl: false
+        }).setView([0, 0], 2);
+
+        // Load Dark Matter Map Tiles (Premium sleek look matching dark UI)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 20
+        }).addTo(map);
+
+        let activeMarker = null;
+        let selectedDeviceId = null;
+        let pollInterval = null;
+        let listInterval = null;
+
+        const video = document.getElementById('videoPlayer');
+        const hls = new Hls({
+            enableWorker: true,
+            lowLatencyMode: true
+        });
+
+        // ── Device Polling ──
+        async function fetchDevices() {
+            try {
+                const response = await fetch('/devices');
+                const data = await response.json();
+                const list = document.getElementById('deviceList');
+                
+                if (data.connected_devices.length === 0) {
+                    list.innerHTML = '<li class="no-data">No active bodycameras online</li>';
+                    return;
+                }
+
+                list.innerHTML = '';
+                data.connected_devices.forEach(device => {
+                    const li = document.createElement('li');
+                    li.className = `device-item ${device.device_id === selectedDeviceId ? 'active' : ''}`;
+                    li.innerHTML = `
+                        <div class="device-title">ID: ${device.device_id}</div>
+                        <div class="device-meta">IP: ${device.address.split(':')[0]}</div>
+                        <div class="device-meta">Ping: ${new Date(device.last_heartbeat * 1000).toLocaleTimeString()}</div>
+                    `;
+                    li.onclick = () => selectDevice(device.device_id);
+                    list.appendChild(li);
+                });
+            } catch (err) {
+                console.error("Failed fetching active registry:", err);
+            }
+        }
+
+        async function selectDevice(deviceId) {
+            selectedDeviceId = deviceId;
+            
+            // Highlight sidebar list item
+            document.querySelectorAll('.device-item').forEach(item => {
+                const isCurrent = item.querySelector('.device-title').innerText.includes(deviceId);
+                item.className = `device-item ${isCurrent ? 'active' : ''}`;
+            });
+
+            // Start playing stream & fetching coordinates
+            playStream(deviceId);
+            fetchLocation(deviceId);
+
+            // Re-setup location polling
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(() => fetchLocation(deviceId), 5000);
+        }
+
+        // ── Video Stream Handlers ──
+        async function playStream(deviceId) {
+            document.getElementById('playerOverlay').style.display = 'none';
+            document.getElementById('playerTitle').innerText = `Live Stream: ID ${deviceId}`;
+
+            try {
+                // Fetch HMAC signed token for device
+                const res = await fetch(`/devices/${deviceId}/token`);
+                if (!res.ok) throw new Error("Could not acquire token");
+                const data = await res.json();
+                const token = data.stream_token;
+
+                // Point player to MediaMTX HLS feed
+                const host = window.location.hostname;
+                const hlsUrl = `http://${host}:8888/${token}/index.m3u8`;
+                console.log(`Loading stream feed: ${hlsUrl}`);
+
+                if (Hls.isSupported()) {
+                    hls.loadSource(hlsUrl);
+                    hls.attachMedia(video);
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+                    hls.on(Hls.Events.ERROR, (event, data) => {
+                        if (data.fatal) {
+                            console.warn("HLS encountered fatal error, attempting recovery...");
+                            hls.recoverMediaError();
+                        }
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = hlsUrl;
+                    video.addEventListener('loadedmetadata', () => video.play());
+                }
+            } catch (err) {
+                console.error("Error setting up stream player:", err);
+                document.getElementById('playerOverlay').innerHTML = `
+                    <h3 style="color: #ef4444;">Playback Failed</h3>
+                    <p>Stream not active or could not authenticate</p>
+                `;
+                document.getElementById('playerOverlay').style.display = 'block';
+            }
+        }
+
+        // ── Location Tracking Handlers ──
+        async function fetchLocation(deviceId) {
+            try {
+                const res = await fetch(`/devices/${deviceId}/location`);
+                if (!res.ok) return; // No coordinates recorded yet
+                const data = await res.json();
+
+                const lat = data.latitude;
+                const lon = data.longitude;
+
+                // Update Stats UI Overlay
+                document.getElementById('mapStats').style.display = 'block';
+                document.getElementById('statDeviceId').innerText = data.device_id;
+                document.getElementById('statLat').innerText = lat.toFixed(6);
+                document.getElementById('statLon').innerText = lon.toFixed(6);
+                document.getElementById('statSpeed').innerText = `${data.speed ? data.speed.toFixed(1) : 0.0} km/h`;
+                document.getElementById('statHeading').innerText = `${data.direction ? data.direction : 0}°`;
+                document.getElementById('statTime').innerText = new Date(data.time).toLocaleTimeString();
+
+                // Update map view & placement
+                const pos = [lat, lon];
+                map.setView(pos, 15);
+
+                if (activeMarker) {
+                    activeMarker.setLatLng(pos);
+                } else {
+                    activeMarker = L.marker(pos).addTo(map);
+                }
+                activeMarker.bindPopup(`<b>Device ${deviceId}</b><br>Speed: ${data.speed} km/h`).openPopup();
+
+            } catch (err) {
+                console.error("Error querying latest telemetry:", err);
+            }
+        }
+
+        // ── Initial Boot ──
+        fetchDevices();
+        listInterval = setInterval(fetchDevices, 5000);
+    </script>
+</body>
+</html>

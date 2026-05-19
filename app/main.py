@@ -54,6 +54,9 @@ async def lifespan(app: FastAPI):
     logger.info("Shutdown complete")
 
 
+from fastapi.responses import HTMLResponse
+import os
+
 app = FastAPI(
     title="Bodycam Control Plane",
     version="1.0.0",
@@ -61,6 +64,12 @@ app = FastAPI(
 )
 
 app.include_router(api_router)
+
+@app.get("/", response_class=HTMLResponse)
+async def get_dashboard():
+    template_path = os.path.join(os.path.dirname(__file__), "templates", "index.html")
+    with open(template_path, "r", encoding="utf-8") as f:
+        return f.read()
 
 if __name__ == "__main__":
     uvicorn.run(
