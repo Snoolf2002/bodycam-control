@@ -2,7 +2,7 @@
 Bodycam Control Plane – application entry-point.
 
 Starts:
-  - FastAPI HTTP server on port 8000
+  - FastAPI HTTP server
   - Async TCP telemetry gateway on port 6608
   - Redis + TimescaleDB connection pools
 """
@@ -13,6 +13,8 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+import os
 
 from app.api.dependencies import init_redis, close_redis, init_db, close_db
 from app.api.routes import router as api_router
@@ -53,9 +55,6 @@ async def lifespan(app: FastAPI):
     await close_db()
     logger.info("Shutdown complete")
 
-
-from fastapi.responses import HTMLResponse
-import os
 
 app = FastAPI(
     title="Bodycam Control Plane",

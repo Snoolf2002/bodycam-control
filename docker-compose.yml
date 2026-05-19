@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"   # REST API / Webhooks
+      - "8001:8000"   # REST API / Webhooks (exposes dashboard on host port 8001)
       - "6608:6608"   # TCP Telemetry Gateway (JT/T 808)
     env_file: .env
     depends_on:
