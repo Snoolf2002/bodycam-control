@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  # ── Python Backend (FastAPI + TCP Gateway) ─────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"   # REST API / Webhooks
+      - "6608:6608"   # TCP Telemetry Gateway (JT/T 808)
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # ── MediaMTX (RTSP Ingest → WebRTC / HLS) ─────────────────────────────
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    ports:
+      - "6604:6604"   # RTSP ingestion from cameras
+      - "8889:8889"   # WebRTC playback
+      - "8888:8888"   # HLS playback
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+    depends_on:
+      - app
+    restart: always
+
+  # ── Redis (Ephemeral Device State) ─────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: always
+
+  # ── TimescaleDB (Persistent GPS Telemetry) ─────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    ports:
+      - "5432:5432"
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bodycam}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bodycam}
+      POSTGRES_DB: ${POSTGRES_DB:-bodycam}
+    volumes:
+      - tsdb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bodycam"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: always
+
+volumes:
+  redis_data:
+  tsdb_data:

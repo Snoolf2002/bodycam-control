@@ -1,0 +1,20 @@
+###############################################################################
+# MediaMTX Configuration – Bodycam Control Plane
+###############################################################################
+
+# ── RTSP Ingestion ───────────────────────────────────────────────────────────
+# Camera devices publish to rtsp://<SERVER_IP>:6604/<BASE64_TOKEN>
+rtspAddress: :6604
+
+# ── Protocol Conversions ────────────────────────────────────────────────────
+# WebRTC – low-latency browser playback
+webrtc: yes
+webrtcAddress: :8889
+
+# HLS – broad compatibility browser playback
+hls: yes
+hlsAddress: :8888
+
+# ── Authentication ──────────────────────────────────────────────────────────
+# Every publish/read request is validated against the FastAPI backend
+externalAuthenticationURL: http://app:8000/webhook/rtsp_auth
