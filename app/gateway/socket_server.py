@@ -30,6 +30,49 @@ from app.models.database import GPSTrack
 logger = logging.getLogger(__name__)
 
 
+def parse_ascii_location(segments: list[str]) -> Optional[dict]:
+    """Parse lat, lon, speed, direction, elevation from ASCII CSV segments."""
+    if len(segments) < 6:
+        return None
+    try:
+        lat = float(segments[4])
+        lon = float(segments[5])
+        
+        # Validate latitude (-90 to 90) and longitude (-180 to 180)
+        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat != 0.0 or lon != 0.0):
+            speed = 0.0
+            if len(segments) > 6:
+                try:
+                    speed = float(segments[6])
+                except ValueError:
+                    pass
+            
+            direction = 0
+            if len(segments) > 7:
+                try:
+                    direction = int(float(segments[7]))
+                except ValueError:
+                    pass
+                    
+            elevation = 0
+            if len(segments) > 8:
+                try:
+                    elevation = int(float(segments[8]))
+                except ValueError:
+                    pass
+            
+            return {
+                "latitude": lat,
+                "longitude": lon,
+                "speed": speed,
+                "direction": direction,
+                "elevation": elevation
+            }
+    except ValueError:
+        pass
+    return None
+
+
 class DeviceConnection:
     """Manages a single persistent TCP connection from a bodycam device."""
 
@@ -52,29 +95,147 @@ class DeviceConnection:
         store = get_device_store()
 
         try:
-            while True:
-                data = await asyncio.wait_for(
-                    self.reader.read(4096),
-                    timeout=float(settings.DEVICE_TTL_SECONDS),
-                )
-                if not data:
-                    break
+            # Read first chunk to determine protocol (ASCII or JT/T 808 Binary)
+            first_chunk = await asyncio.wait_for(
+                self.reader.read(4096),
+                timeout=10.0,
+            )
+            if not first_chunk:
+                return
 
-                for raw in self.buffer.feed(data):
-                    try:
-                        pkt = parse_packet(raw)
-                        await self._dispatch(pkt, store)
-                    except ValueError as exc:
-                        logger.warning("[%s] Malformed packet: %s", self.addr, exc)
+            # Check for ASCII marker
+            is_ascii = b"$$" in first_chunk or (first_chunk.startswith(b"$") and b"#" in first_chunk)
+
+            if is_ascii:
+                logger.info("[%s] Detected ASCII protocol connection", self.addr)
+                await self.handle_ascii(first_chunk, store)
+            else:
+                logger.info("[%s] Detected Binary JT/T 808 protocol connection", self.addr)
+                await self.handle_binary(first_chunk, store)
 
         except asyncio.TimeoutError:
-            logger.warning("[%s] Timed out after %ds", self.addr, settings.DEVICE_TTL_SECONDS)
+            logger.warning("[%s] Timed out waiting for initial packet", self.addr)
         except ConnectionResetError:
             logger.info("[%s] Connection reset by peer", self.addr)
         except Exception as exc:
             logger.error("[%s] Unexpected error: %s", self.addr, exc, exc_info=True)
         finally:
             await self._cleanup(store)
+
+    async def handle_binary(self, first_chunk: bytes, store) -> None:
+        # Feed the first chunk
+        for raw in self.buffer.feed(first_chunk):
+            try:
+                pkt = parse_packet(raw)
+                await self._dispatch(pkt, store)
+            except ValueError as exc:
+                logger.warning("[%s] Malformed packet: %s", self.addr, exc)
+
+        # Read loop
+        while True:
+            data = await asyncio.wait_for(
+                self.reader.read(4096),
+                timeout=float(settings.DEVICE_TTL_SECONDS),
+            )
+            if not data:
+                break
+
+            for raw in self.buffer.feed(data):
+                try:
+                    pkt = parse_packet(raw)
+                    await self._dispatch(pkt, store)
+                except ValueError as exc:
+                    logger.warning("[%s] Malformed packet: %s", self.addr, exc)
+
+    async def handle_ascii(self, first_chunk: bytes, store) -> None:
+        ascii_buffer = ""
+        
+        # Helper to process a single complete ASCII packet (e.g. $$...,...,...#)
+        async def process_ascii_packet(packet_str: str) -> None:
+            if not ("$$" in packet_str and "#" in packet_str):
+                return
+            
+            # Extract content between $$ and #
+            content = packet_str.split('$$')[-1].split('#')[0]
+            segments = [s.strip() for s in content.split(',')]
+            
+            if len(segments) >= 4:
+                device_id = segments[3]
+                if not device_id:
+                    return
+                
+                # If device ID changes or is first registered
+                if self.device_id != device_id:
+                    self.device_id = device_id
+                    logger.info("[%s] ASCII Device identified: %s", self.addr, self.device_id)
+                    await store.register_device(self.device_id, self.addr)
+                    
+                    # Generate and store stream token so they can watch HLS/WebRTC
+                    token = generate_stream_token(self.device_id, settings.SECRET_KEY)
+                    await store.store_stream_token(self.device_id, token)
+                    logger.info("[%s] ASCII Device registered successfully with stream token", self.device_id)
+                else:
+                    # Update heartbeat
+                    await store.heartbeat(self.device_id)
+                
+                # Check if it has GPS coordinates
+                loc_data = parse_ascii_location(segments)
+                if loc_data:
+                    logger.info(
+                        "[%s] ASCII GPS lat=%.6f lon=%.6f spd=%.1fkm/h dir=%d",
+                        self.device_id,
+                        loc_data["latitude"],
+                        loc_data["longitude"],
+                        loc_data["speed"],
+                        loc_data["direction"],
+                    )
+                    # Persist to TimescaleDB
+                    try:
+                        session_factory = get_session_factory()
+                        async with session_factory() as session:
+                            track = GPSTrack(
+                                time=datetime.now(timezone.utc),
+                                device_id=self.device_id,
+                                latitude=loc_data["latitude"],
+                                longitude=loc_data["longitude"],
+                                speed=loc_data["speed"],
+                                direction=loc_data["direction"],
+                                elevation=loc_data["elevation"],
+                                alarm_flags=0,
+                                status_flags=12,  # Standard active GPS status flags
+                            )
+                            session.add(track)
+                            await session.commit()
+                    except Exception as exc:
+                        logger.error("[%s] DB write failed: %s", self.device_id, exc)
+
+        # Process first chunk
+        decoded_chunk = first_chunk.decode('ascii', errors='ignore')
+        ascii_buffer += decoded_chunk
+        
+        while '#' in ascii_buffer:
+            parts = ascii_buffer.split('#', 1)
+            packet = parts[0] + '#'
+            ascii_buffer = parts[1]
+            await process_ascii_packet(packet)
+
+        # Read loop
+        while True:
+            data = await asyncio.wait_for(
+                self.reader.read(4096),
+                timeout=float(settings.DEVICE_TTL_SECONDS),
+            )
+            if not data:
+                break
+            
+            decoded_chunk = data.decode('ascii', errors='ignore')
+            ascii_buffer += decoded_chunk
+            
+            while '#' in ascii_buffer:
+                parts = ascii_buffer.split('#', 1)
+                packet = parts[0] + '#'
+                ascii_buffer = parts[1]
+                await process_ascii_packet(packet)
 
     # ── Dispatcher ───────────────────────────────────────────────────────
 
