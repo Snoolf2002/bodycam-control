@@ -25,6 +25,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
+# Enable DEBUG for the socket server so raw ASCII packets are visible
+logging.getLogger("app.gateway.socket_server").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 

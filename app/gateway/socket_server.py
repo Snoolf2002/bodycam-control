@@ -26,7 +26,7 @@ from app.gateway.protocol_808 import (
 )
 from app.api.dependencies import get_device_store, get_session_factory
 from app.core.config import settings
-from app.core.security import generate_stream_token
+from app.core.security import generate_stream_token, verify_stream_token
 from app.models.database import GPSTrack
 
 logger = logging.getLogger(__name__)
@@ -180,6 +180,10 @@ class DeviceConnection:
             content = packet_str.split('$$')[-1].split('#')[0]
             segments = [s.strip() for s in content.split(',')]
             
+            # Debug: log the raw packet so we can see exactly what the camera sends
+            logger.debug("[%s] RAW ASCII packet: %s", self.addr, packet_str[:200])
+            logger.debug("[%s] Parsed segments (%d): %s", self.addr, len(segments), segments)
+            
             if len(segments) >= 4:
                 device_id = segments[3]
                 if not device_id:
@@ -225,12 +229,24 @@ class DeviceConnection:
                                 direction=loc_data["direction"],
                                 elevation=loc_data["elevation"],
                                 alarm_flags=0,
-                                status_flags=12,  # Standard active GPS status flags
+                                status_flags=12,
                             )
                             session.add(track)
                             await session.commit()
                     except Exception as exc:
                         logger.error("[%s] DB write failed: %s", self.device_id, exc)
+                else:
+                    # Log why GPS was skipped (helps debug 0,0 or missing coords)
+                    if len(segments) >= 6:
+                        logger.debug(
+                            "[%s] GPS not persisted (lat=%s lon=%s) – invalid or zero coords",
+                            self.device_id,
+                            segments[4] if len(segments) > 4 else "N/A",
+                            segments[5] if len(segments) > 5 else "N/A",
+                        )
+            else:
+                logger.debug("[%s] Packet has only %d segments, skipping", self.addr, len(segments))
+
 
         # Process first chunk
         decoded_chunk = first_chunk.decode('ascii', errors='ignore')
@@ -481,15 +497,36 @@ async def start_proxy_server(host: str, port: int) -> None:
                 m_writer.close()
                 return
 
-            # Find which camera corresponds to this path
+            # ── Resolve device_id from the path ──────────────────────────
+            # MediaMTX sends whatever path the dashboard gave it. The
+            # dashboard uses the HMAC stream token as the path:
+            #   {signature},{device_id},{timestamp},{nonce}
+            # Try HMAC decode first, fall back to b64_path matching.
             conn: Optional[DeviceConnection] = None
-            for dev_conn in list(active_connections.values()):
-                if dev_conn.b64_path == requested_path:
-                    conn = dev_conn
-                    break
+
+            # 1. Try HMAC token → device_id lookup
+            device_id_from_token = verify_stream_token(
+                requested_path, settings.SECRET_KEY
+            )
+            if device_id_from_token:
+                conn = active_connections.get(device_id_from_token)
+                logger.info(
+                    "[PROXY] HMAC token resolved to device=%s", device_id_from_token
+                )
+
+            # 2. Fallback: match against b64_path (camera-direct RTSP push)
+            if conn is None:
+                for dev_conn in list(active_connections.values()):
+                    if dev_conn.b64_path == requested_path:
+                        conn = dev_conn
+                        break
 
             if conn is None:
-                logger.warning("[PROXY] No active camera for path=%s...", requested_path[:24])
+                logger.warning(
+                    "[PROXY] No active camera for path=%s (token_device=%s)",
+                    requested_path[:40],
+                    device_id_from_token,
+                )
                 m_writer.close()
                 return
 
