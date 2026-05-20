@@ -470,8 +470,10 @@ async def start_proxy_server(host: str, port: int) -> None:
                     parts = line.split()
                     if len(parts) >= 2:
                         url = parts[1]
-                        # Extract everything after the last '/'
-                        requested_path = url.rstrip("/").split("/")[-1]
+                        if url == "*":
+                            continue
+                        # Extract everything after the last '/' and strip query parameters
+                        requested_path = url.rstrip("/").split("/")[-1].split("?")[0]
                         break
 
             if not requested_path:
