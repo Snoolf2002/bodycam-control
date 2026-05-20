@@ -4,6 +4,7 @@ Bodycam Control Plane – application entry-point.
 Starts:
   - FastAPI HTTP server
   - Async TCP telemetry gateway on port 6608
+  - Async RTSP proxy server on port 6609
   - Redis + TimescaleDB connection pools
 """
 
@@ -18,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.dependencies import init_redis, close_redis, init_db, close_db
 from app.api.routes import router as api_router
 from app.core.config import settings
-from app.gateway.socket_server import start_telemetry_server
+from app.gateway.socket_server import start_telemetry_server, start_proxy_server
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,12 +43,22 @@ async def lifespan(app: FastAPI):
         start_telemetry_server(settings.GATEWAY_HOST, settings.GATEWAY_PORT)
     )
 
+    logger.info("Starting RTSP proxy server on %s:%d …", settings.GATEWAY_HOST, settings.PROXY_PORT)
+    proxy_task = asyncio.create_task(
+        start_proxy_server(settings.GATEWAY_HOST, settings.PROXY_PORT)
+    )
+
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────
     gateway_task.cancel()
+    proxy_task.cancel()
     try:
         await gateway_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await proxy_task
     except asyncio.CancelledError:
         pass
     await close_redis()

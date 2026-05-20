@@ -9,6 +9,7 @@ services:
     ports:
       - "8001:8001"   # REST API / Webhooks
       - "6608:6608"   # TCP Telemetry Gateway (JT/T 808)
+      - "6609:6609"   # RTSP Proxy Server (camera ↔ MediaMTX)
     env_file: .env
     depends_on:
       redis:

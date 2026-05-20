@@ -7,13 +7,15 @@ Features:
   - Async GPS persistence to TimescaleDB
   - Read timeout to evict stale connections
   - Proper JT/T 808 response packets sent back to devices
+  - Bidirectional RTSP proxy for camera video streaming
 """
 
 import asyncio
+import base64
 import struct
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Dict
 
 from app.gateway.protocol_808 import (
     PacketBuffer,
@@ -28,6 +30,17 @@ from app.core.security import generate_stream_token
 from app.models.database import GPSTrack
 
 logger = logging.getLogger(__name__)
+
+# Global registry: device_id -> DeviceConnection (keeps the live socket accessible to the proxy)
+active_connections: Dict[str, "DeviceConnection"] = {}
+
+_SESSION_TOKEN = "8BF6DE248647478581A01D6A42B2E452"
+
+
+def generate_dynamic_rtsp_path(device_id: str) -> str:
+    """Generate the Base64 RTSP path the camera firmware expects."""
+    raw_payload = f"{_SESSION_TOKEN},3,{device_id},0,1,0,0,0"
+    return base64.b64encode(raw_payload.encode("utf-8")).decode("utf-8")
 
 
 def parse_ascii_location(segments: list[str]) -> Optional[dict]:
@@ -87,12 +100,16 @@ class DeviceConnection:
         self.device_id: Optional[str] = None
         self.phone_bcd: bytes = b'\x00' * 6
         self.buffer = PacketBuffer()
+        self.b64_path: Optional[str] = None    # RTSP path the camera expects
+        self.proxying: bool = False             # True when proxy has taken over the socket
+        self.handle_task: Optional[asyncio.Task] = None  # Reference for cancellation
 
     # ── Main loop ────────────────────────────────────────────────────────
 
     async def handle(self) -> None:
         logger.info("New connection from %s", self.addr)
         store = get_device_store()
+        self.handle_task = asyncio.current_task()
 
         try:
             # Read first chunk to determine protocol (ASCII or JT/T 808 Binary)
@@ -113,6 +130,10 @@ class DeviceConnection:
                 logger.info("[%s] Detected Binary JT/T 808 protocol connection", self.addr)
                 await self.handle_binary(first_chunk, store)
 
+        except asyncio.CancelledError:
+            # Proxy server cancelled the telemetry task to take ownership of the socket
+            if not self.proxying:
+                logger.info("[%s] Telemetry task cancelled (device=%s)", self.addr, self.device_id)
         except asyncio.TimeoutError:
             logger.warning("[%s] Timed out waiting for initial packet", self.addr)
         except ConnectionResetError:
@@ -167,7 +188,9 @@ class DeviceConnection:
                 # If device ID changes or is first registered
                 if self.device_id != device_id:
                     self.device_id = device_id
-                    logger.info("[%s] ASCII Device identified: %s", self.addr, self.device_id)
+                    self.b64_path = generate_dynamic_rtsp_path(device_id)
+                    active_connections[device_id] = self
+                    logger.info("[%s] ASCII Device identified: %s (path=%s...)", self.addr, self.device_id, self.b64_path[:16])
                     await store.register_device(self.device_id, self.addr)
                     
                     # Generate and store stream token so they can watch HLS/WebRTC
@@ -263,6 +286,8 @@ class DeviceConnection:
 
     async def _on_register(self, pkt: ParsedPacket, store) -> None:
         logger.info("[%s] Registration from %s", self.device_id, self.addr)
+        self.b64_path = generate_dynamic_rtsp_path(self.device_id)
+        active_connections[self.device_id] = self
         await store.register_device(self.device_id, self.addr)
 
         # Generate HMAC stream token and persist in Redis
@@ -274,7 +299,7 @@ class DeviceConnection:
         body = struct.pack(">H", pkt.msg_seq) + b'\x00' + auth_code
         self.writer.write(build_packet(0x8100, self.phone_bcd, pkt.msg_seq, body))
         await self.writer.drain()
-        logger.info("[%s] Registered successfully", self.device_id)
+        logger.info("[%s] Registered successfully (path=%s...)", self.device_id, self.b64_path[:16])
 
     async def _on_auth(self, pkt: ParsedPacket, store) -> None:
         logger.info("[%s] Authentication from %s", self.device_id, self.addr)
@@ -333,8 +358,14 @@ class DeviceConnection:
         await self.writer.drain()
 
     async def _cleanup(self, store) -> None:
+        # If proxy has taken over this socket, do NOT close it or deregister the device.
+        if self.proxying:
+            logger.info("[%s] Telemetry task exiting, proxy owns socket (device=%s)", self.addr, self.device_id)
+            return
+
         logger.info("[%s] Connection closed (device=%s)", self.addr, self.device_id)
         if self.device_id:
+            active_connections.pop(self.device_id, None)
             await store.remove_device(self.device_id)
         self.writer.close()
         try:
@@ -343,7 +374,54 @@ class DeviceConnection:
             pass
 
 
-# ── Server entry-point ───────────────────────────────────────────────────────
+# ── Pump helpers ─────────────────────────────────────────────────────────────
+
+async def _pump_c_to_m(
+    c_reader: asyncio.StreamReader,
+    m_writer: asyncio.StreamWriter,
+    device_id: str,
+) -> None:
+    """Pipe raw H.264 bytes from the camera socket up to MediaMTX."""
+    try:
+        while True:
+            chunk = await c_reader.read(65536)
+            if not chunk:
+                break
+            # Strip ASCII telemetry keep-alives that may interrupt the video stream
+            if chunk.startswith(b"$$") and b"#" in chunk:
+                end_idx = chunk.find(b"#")
+                if end_idx != -1:
+                    chunk = chunk[end_idx + 1:]
+            if chunk:
+                m_writer.write(chunk)
+                await m_writer.drain()
+    except Exception as exc:
+        logger.debug("[%s] cam→mediamtx pump ended: %s", device_id, exc)
+    finally:
+        try:
+            m_writer.close()
+        except Exception:
+            pass
+
+
+async def _pump_m_to_c(
+    m_reader: asyncio.StreamReader,
+    c_writer: asyncio.StreamWriter,
+    device_id: str,
+) -> None:
+    """Pipe RTSP commands from MediaMTX down to the camera socket."""
+    try:
+        while True:
+            chunk = await m_reader.read(65536)
+            if not chunk:
+                break
+            c_writer.write(chunk)
+            await c_writer.drain()
+    except Exception as exc:
+        logger.debug("[%s] mediamtx→cam pump ended: %s", device_id, exc)
+
+
+# ── Server entry-points ──────────────────────────────────────────────────────
 
 async def start_telemetry_server(host: str, port: int) -> None:
     async def _on_connect(
@@ -355,6 +433,106 @@ async def start_telemetry_server(host: str, port: int) -> None:
     server = await asyncio.start_server(_on_connect, host, port)
     addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
     logger.info("Telemetry Server listening on %s", addrs)
+
+    async with server:
+        await server.serve_forever()
+
+
+async def start_proxy_server(host: str, port: int) -> None:
+    """
+    RTSP proxy server (port 6609).
+
+    MediaMTX is configured with source=rtsp://app:6609/$path.
+    When it wants a stream it opens a TCP connection here, sends an RTSP
+    DESCRIBE with the Base64 path, and we splice that connection to the
+    matching live camera socket.
+    """
+    async def _on_proxy_connect(
+        m_reader: asyncio.StreamReader, m_writer: asyncio.StreamWriter
+    ) -> None:
+        peer = m_writer.get_extra_info("peername")
+        logger.info("[PROXY] Incoming connection from MediaMTX %s", peer)
+
+        try:
+            # Read the initial RTSP request to extract the stream path
+            header_bytes = await asyncio.wait_for(m_reader.read(4096), timeout=10.0)
+            if not header_bytes:
+                m_writer.close()
+                return
+
+            # Decode and look for the RTSP path in DESCRIBE / OPTIONS / PLAY line
+            header_text = header_bytes.decode("utf-8", errors="ignore")
+            requested_path: Optional[str] = None
+
+            for line in header_text.splitlines():
+                # Typical line: "DESCRIBE rtsp://host:port/<base64path> RTSP/1.0"
+                if line.upper().startswith(("DESCRIBE", "OPTIONS", "SETUP", "PLAY", "ANNOUNCE")):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        url = parts[1]
+                        # Extract everything after the last '/'
+                        requested_path = url.rstrip("/").split("/")[-1]
+                        break
+
+            if not requested_path:
+                logger.warning("[PROXY] Could not extract RTSP path from request")
+                m_writer.close()
+                return
+
+            # Find which camera corresponds to this path
+            conn: Optional[DeviceConnection] = None
+            for dev_conn in list(active_connections.values()):
+                if dev_conn.b64_path == requested_path:
+                    conn = dev_conn
+                    break
+
+            if conn is None:
+                logger.warning("[PROXY] No active camera for path=%s...", requested_path[:24])
+                m_writer.close()
+                return
+
+            logger.info("[PROXY] Splicing MediaMTX to camera device=%s", conn.device_id)
+
+            # Mark the camera socket as proxying and cancel its telemetry loop
+            conn.proxying = True
+            if conn.handle_task and not conn.handle_task.done():
+                conn.handle_task.cancel()
+                # Give the telemetry loop a moment to exit cleanly
+                await asyncio.sleep(0.05)
+
+            # Forward the initial request bytes to the camera
+            conn.writer.write(header_bytes)
+            await conn.writer.drain()
+
+            # Bidirectional pipe: camera ↔ MediaMTX
+            await asyncio.gather(
+                _pump_c_to_m(conn.reader, m_writer, conn.device_id),
+                _pump_m_to_c(m_reader, conn.writer, conn.device_id),
+                return_exceptions=True,
+            )
+
+        except asyncio.TimeoutError:
+            logger.warning("[PROXY] Timed out reading RTSP headers from MediaMTX")
+        except Exception as exc:
+            logger.error("[PROXY] Error: %s", exc, exc_info=True)
+        finally:
+            # After streaming ends, clean up the camera connection
+            device_id = conn.device_id if conn else None
+            if conn:
+                conn.proxying = False
+                active_connections.pop(device_id, None)
+                store = get_device_store()
+                try:
+                    await store.remove_device(device_id)
+                except Exception:
+                    pass
+                conn.writer.close()
+            m_writer.close()
+            logger.info("[PROXY] Stream ended for device=%s", device_id)
+
+    server = await asyncio.start_server(_on_proxy_connect, host, port)
+    addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
+    logger.info("RTSP Proxy Server listening on %s", addrs)
 
     async with server:
         await server.serve_forever()

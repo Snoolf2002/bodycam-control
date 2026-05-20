@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # TCP Telemetry Gateway
     GATEWAY_HOST: str = "0.0.0.0"
     GATEWAY_PORT: int = 6608
+    PROXY_PORT: int = 6609
 
     # HMAC secret for stream token signing
     SECRET_KEY: str = "CHANGE-ME-IN-PRODUCTION"
