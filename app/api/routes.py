@@ -121,23 +121,30 @@ async def get_device_token(device_id: str):
 @router.get("/devices/{device_id}/location")
 async def get_device_location(device_id: str):
     """Get the most recent GPS coordinate for a device from TimescaleDB."""
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(GPSTrack)
-            .where(GPSTrack.device_id == device_id)
-            .order_by(GPSTrack.time.desc())
-            .limit(1)
-        )
-        track = result.scalar_one_or_none()
-        if not track:
-            raise HTTPException(status_code=404, detail="No location data")
-        return LocationInfo(
-            device_id=track.device_id,
-            latitude=track.latitude,
-            longitude=track.longitude,
-            speed=track.speed,
-            direction=track.direction,
-            elevation=track.elevation,
-            time=track.time.isoformat(),
-        )
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            result = await session.execute(
+                select(GPSTrack)
+                .where(GPSTrack.device_id == device_id)
+                .order_by(GPSTrack.time.desc())
+                .limit(1)
+            )
+            track = result.scalar_one_or_none()
+            if not track:
+                raise HTTPException(status_code=404, detail="No location data yet")
+            return LocationInfo(
+                device_id=track.device_id,
+                latitude=track.latitude,
+                longitude=track.longitude,
+                speed=track.speed,
+                direction=track.direction,
+                elevation=track.elevation,
+                time=track.time.isoformat(),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Location DB error for device %s: %s", device_id, exc)
+        raise HTTPException(status_code=404, detail="No location data yet")
+
