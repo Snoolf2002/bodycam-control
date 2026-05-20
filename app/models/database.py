@@ -29,17 +29,30 @@ class GPSTrack(Base):
     status_flags = Column(Integer, nullable=True)
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 async def init_database(engine) -> None:
     """Create tables and optionally convert to TimescaleDB hypertable."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        try:
+        logger.info("Database tables created successfully.")
+
+    try:
+        async with engine.begin() as conn:
             await conn.execute(
                 text(
                     "SELECT create_hypertable('gps_tracks', 'time', "
                     "if_not_exists => TRUE)"
                 )
             )
-        except Exception:
-            # TimescaleDB extension may not be available; regular table is fine
-            pass
+            logger.info("TimescaleDB hypertable created successfully.")
+    except Exception as exc:
+        # TimescaleDB extension may not be available; regular table is fine
+        logger.warning(
+            "TimescaleDB extension or hypertable creation failed (falling back to standard table): %s",
+            exc,
+        )
+
