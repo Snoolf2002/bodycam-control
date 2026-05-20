@@ -17,4 +17,4 @@ hlsAddress: :8888
 
 # ── Authentication ──────────────────────────────────────────────────────────
 # Every publish/read request is validated against the FastAPI backend
-externalAuthenticationURL: http://app:8000/webhook/rtsp_auth
+externalAuthenticationURL: http://app:8001/webhook/rtsp_auth

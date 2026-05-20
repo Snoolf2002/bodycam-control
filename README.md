@@ -114,7 +114,7 @@ Your server must accept inbound connections on the following ports:
 | **`6604`** | TCP | Inbound | Streaming Plane (RTSP stream ingest from bodycams) |
 | **`8889`** | TCP/UDP| Inbound | WebRTC Playback (for browser views) |
 | **`8888`** | TCP | Inbound | HLS Playback |
-| **`8000`** | TCP | Inbound | Control API (Proxy through Nginx/Caddy with TLS) |
+| **`8001`** | TCP | Inbound | Control API (Proxy through Nginx/Caddy with TLS) |
 
 ---
 
