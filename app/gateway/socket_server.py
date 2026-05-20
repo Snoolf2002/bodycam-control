@@ -44,46 +44,78 @@ def generate_dynamic_rtsp_path(device_id: str) -> str:
 
 
 def parse_ascii_location(segments: list[str]) -> Optional[dict]:
-    """Parse lat, lon, speed, direction, elevation from ASCII CSV segments."""
-    if len(segments) < 6:
+    """
+    Parse GPS data from V101 ASCII protocol segments.
+
+    V101 packet format:
+      [0]  seq+check   e.g. 'dc0240'
+      [1]  length
+      [2]  protocol    'V101'
+      [3]  device_id
+      [4]  phone       (often empty)
+      [5]  datetime    'DDMMYY HHMMSS'
+      [6]  gps_valid   'A0000' = valid, 'V0000' = void/no fix
+      [7]  latitude    decimal degrees
+      [8]  longitude   decimal degrees
+      [9]  speed       km/h
+      [10] direction   degrees
+      [11] elevation   metres
+    """
+    if len(segments) < 9:
         return None
     try:
-        lat = float(segments[4])
-        lon = float(segments[5])
-        
-        # Validate latitude (-90 to 90) and longitude (-180 to 180)
-        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat != 0.0 or lon != 0.0):
-            speed = 0.0
-            if len(segments) > 6:
-                try:
-                    speed = float(segments[6])
-                except ValueError:
-                    pass
-            
-            direction = 0
-            if len(segments) > 7:
-                try:
-                    direction = int(float(segments[7]))
-                except ValueError:
-                    pass
-                    
-            elevation = 0
-            if len(segments) > 8:
-                try:
-                    elevation = int(float(segments[8]))
-                except ValueError:
-                    pass
-            
-            return {
-                "latitude": lat,
-                "longitude": lon,
-                "speed": speed,
-                "direction": direction,
-                "elevation": elevation
-            }
-    except ValueError:
-        pass
-    return None
+        # Check GPS validity flag – 'V' prefix means no satellite fix
+        gps_flag = segments[6] if len(segments) > 6 else ""
+        if gps_flag.upper().startswith("V"):
+            return None  # No fix yet
+
+        lat_str = segments[7].strip()
+        lon_str = segments[8].strip()
+
+        if not lat_str or not lon_str:
+            return None
+
+        lat = float(lat_str)
+        lon = float(lon_str)
+
+        # Reject zero coords and out-of-range values
+        if lat == 0.0 and lon == 0.0:
+            return None
+        if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+            return None
+
+        speed = 0.0
+        if len(segments) > 9:
+            try:
+                speed = float(segments[9])
+            except ValueError:
+                pass
+
+        direction = 0
+        if len(segments) > 10:
+            try:
+                direction = int(float(segments[10]))
+            except ValueError:
+                pass
+
+        elevation = 0
+        if len(segments) > 11:
+            try:
+                elevation = int(float(segments[11]))
+            except ValueError:
+                pass
+
+        return {
+            "latitude": lat,
+            "longitude": lon,
+            "speed": speed,
+            "direction": direction,
+            "elevation": elevation,
+        }
+    except (ValueError, IndexError):
+        return None
+
+
 
 
 class DeviceConnection:
@@ -237,12 +269,13 @@ class DeviceConnection:
                         logger.error("[%s] DB write failed: %s", self.device_id, exc)
                 else:
                     # Log why GPS was skipped (helps debug 0,0 or missing coords)
-                    if len(segments) >= 6:
+                    if len(segments) >= 9:
                         logger.debug(
-                            "[%s] GPS not persisted (lat=%s lon=%s) – invalid or zero coords",
+                            "[%s] GPS not persisted (lat=%s lon=%s flag=%s) – invalid or zero coords",
                             self.device_id,
-                            segments[4] if len(segments) > 4 else "N/A",
-                            segments[5] if len(segments) > 5 else "N/A",
+                            segments[7] if len(segments) > 7 else "N/A",
+                            segments[8] if len(segments) > 8 else "N/A",
+                            segments[6] if len(segments) > 6 else "N/A",
                         )
             else:
                 logger.debug("[%s] Packet has only %d segments, skipping", self.addr, len(segments))
