@@ -16,6 +16,7 @@ class GPSTrack(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     time = Column(
         DateTime(timezone=True),
+        primary_key=True,
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
