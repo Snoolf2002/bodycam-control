@@ -139,6 +139,8 @@ class DeviceConnection:
         self.proxying: bool = False             # True when proxy has taken over the socket
         self.handle_task: Optional[asyncio.Task] = None  # Reference for cancellation
         self.seq_num: int = 0
+        self.is_ascii: bool = False
+        self.phone_ascii: str = ""
 
     def next_seq(self) -> int:
         """Get the next sequence number (0-65535)."""
@@ -153,6 +155,40 @@ class DeviceConnection:
         self.writer.write(pkt)
         await self.writer.drain()
         return seq
+
+    async def send_ascii_ack(self, cmd_type: str) -> None:
+        """Send a V101 ASCII ACK back to the device to keep connection alive."""
+        base_str = f"cd{cmd_type},{{}},V101,{self.device_id},{self.phone_ascii},#"
+        packet = ""
+        for L in range(10, 1000):
+            test_str = f"$${base_str.format(L)}"
+            if len(test_str) == L:
+                packet = test_str
+                break
+        if not packet:
+            packet = f"$$cd{cmd_type},0,V101,{self.device_id},{self.phone_ascii},#"
+
+        logger.debug("[%s] Sending ASCII ACK: %s", self.device_id, packet)
+        self.writer.write(packet.encode("ascii"))
+        await self.writer.drain()
+
+    async def send_ascii_command(self, cmd_type: str, payload_fields: list) -> str:
+        """Send a V101 ASCII command to the device."""
+        payload_str = ",".join(str(f) for f in payload_fields)
+        base_str = f"cd{cmd_type},{{}},V101,{self.device_id},{self.phone_ascii},{payload_str}#"
+        packet = ""
+        for L in range(10, 1000):
+            test_str = f"$${base_str.format(L)}"
+            if len(test_str) == L:
+                packet = test_str
+                break
+        if not packet:
+            packet = f"$$cd{cmd_type},0,V101,{self.device_id},{self.phone_ascii},{payload_str}#"
+
+        logger.info("[%s] Sending ASCII command: %s", self.device_id, packet)
+        self.writer.write(packet.encode("ascii"))
+        await self.writer.drain()
+        return packet
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -174,6 +210,7 @@ class DeviceConnection:
             is_ascii = b"$$" in first_chunk or (first_chunk.startswith(b"$") and b"#" in first_chunk)
 
             if is_ascii:
+                self.is_ascii = True
                 logger.info("[%s] Detected ASCII protocol connection", self.addr)
                 await self.handle_ascii(first_chunk, store)
             else:
@@ -239,6 +276,9 @@ class DeviceConnection:
                 if not device_id:
                     return
                 
+                # Extract and save phone field (often empty)
+                self.phone_ascii = segments[4] if len(segments) > 4 else ""
+
                 # If device ID changes or is first registered
                 if self.device_id != device_id:
                     self.device_id = device_id
@@ -296,6 +336,11 @@ class DeviceConnection:
                             segments[8] if len(segments) > 8 else "N/A",
                             segments[6] if len(segments) > 6 else "N/A",
                         )
+
+                # Respond with an ASCII ACK to keep the socket alive
+                cmd_type = segments[0][2:] if len(segments[0]) > 2 else ""
+                if cmd_type:
+                    await self.send_ascii_ack(cmd_type)
             else:
                 logger.debug("[%s] Packet has only %d segments, skipping", self.addr, len(segments))
 
@@ -608,7 +653,7 @@ async def start_proxy_server(host: str, port: int) -> None:
             # Define translation paths:
             # - MediaMTX requests using `requested_path` (which can be HMAC or unpadded Base64)
             # - The camera expects the fully-padded Base64 path.
-            camera_path = conn.b64_path + "=" * (4 - len(conn.b64_path) % 4)
+            camera_path = conn.b64_path + "=" * (-len(conn.b64_path) % 4)
 
             # Forward the initial request bytes to the camera (with restored base64 padding and port translation)
             modified_header_bytes = header_bytes.replace(

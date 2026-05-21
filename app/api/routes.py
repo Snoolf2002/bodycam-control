@@ -89,7 +89,7 @@ async def rtsp_auth(request: MediaMTXAuthRequest):
     # ── 1. Base64 CMSv6 path (camera native push format) ────────────────────
     try:
         # Base64 decode; pad to multiple of 4 if needed
-        padded = path + "=" * (4 - len(path) % 4)
+        padded = path + "=" * (-len(path) % 4)
         decoded = base64.b64decode(padded).decode("utf-8")
         parts = decoded.split(",")
         if len(parts) >= 3:
@@ -228,6 +228,36 @@ async def start_device_stream(device_id: str, request: StartStreamRequest):
             status_code=404,
             detail=f"Device connection not found or offline: {device_id}",
         )
+
+    if getattr(conn, "is_ascii", False):
+        try:
+            packet_str = await conn.send_ascii_command(
+                "9101",
+                [
+                    request.ip,
+                    request.port,
+                    request.channel,
+                    request.data_type,
+                    request.stream_type,
+                ]
+            )
+            logger.info(
+                "[%s] Dispatched ASCII 9101 command: %s",
+                device_id,
+                packet_str,
+            )
+            return {
+                "status": "ok",
+                "message": "Start-stream ASCII command sent successfully",
+                "device_id": device_id,
+                "packet": packet_str,
+            }
+        except Exception as exc:
+            logger.error("[%s] Failed to send ASCII 9101 command: %s", device_id, exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to transmit ASCII command to the device: {exc}",
+            )
 
     try:
         body = build_9101_body(
