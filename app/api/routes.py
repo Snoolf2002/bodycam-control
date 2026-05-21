@@ -255,6 +255,7 @@ async def start_device_stream(device_id: str, request: StartStreamRequest):
                 [
                     request.ip,
                     request.port,
+                    0,  # UDP Port (0 for TCP mode)
                     request.channel or 1,
                     request.data_type,
                     request.stream_type,

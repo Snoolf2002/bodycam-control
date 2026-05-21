@@ -216,6 +216,7 @@ class DeviceConnection:
                         [
                             ip,
                             port,
+                            0,  # UDP Port (0 for TCP mode)
                             channel,
                             data_type,
                             stream_type,
