@@ -275,16 +275,11 @@ class DeviceConnection:
                     logger.info("[%s] ASCII Device identified: %s (path=%s...)", self.addr, self.device_id, self.b64_path[:16])
                     await store.register_device(self.device_id, self.addr)
 
-                    # Unregister any stale path from a previous session
-                    old_token = await store.get_stream_token(self.device_id)
-                    if old_token:
-                        await _unregister_mediamtx_path(old_token)
-
-                    # Generate new token, persist in Redis, register path in MediaMTX
-                    token = generate_stream_token(self.device_id, settings.SECRET_KEY)
-                    await store.store_stream_token(self.device_id, token)
-                    await _register_mediamtx_path(token)
-                    logger.info("[%s] ASCII Device registered successfully with stream token", self.device_id)
+                    # Store the b64_path as the stream token.
+                    # The camera pushes RTSP to MediaMTX at this exact path, so
+                    # the HLS URL the dashboard needs is /8888/<b64_path>/index.m3u8.
+                    await store.store_stream_token(self.device_id, self.b64_path)
+                    logger.info("[%s] ASCII Device registered successfully", self.device_id)
                 else:
                     # Update heartbeat
                     await store.heartbeat(self.device_id)
@@ -391,15 +386,9 @@ class DeviceConnection:
         active_connections[self.device_id] = self
         await store.register_device(self.device_id, self.addr)
 
-        # Unregister any stale path from a previous session
-        old_token = await store.get_stream_token(self.device_id)
-        if old_token:
-            await _unregister_mediamtx_path(old_token)
-
-        # Generate new HMAC stream token, persist in Redis, register path in MediaMTX
-        token = generate_stream_token(self.device_id, settings.SECRET_KEY)
-        await store.store_stream_token(self.device_id, token)
-        await _register_mediamtx_path(token)
+        # Store the b64_path as the stream token — camera pushes RTSP to MediaMTX
+        # at this path, so HLS is available at :8888/<b64_path>/index.m3u8.
+        await store.store_stream_token(self.device_id, self.b64_path)
 
         # Reply 0x8100: seq(WORD) + result(BYTE=0 success) + auth_code
         auth_code = self.device_id.encode("ascii")
@@ -473,10 +462,6 @@ class DeviceConnection:
         logger.info("[%s] Connection closed (device=%s)", self.addr, self.device_id)
         if self.device_id:
             active_connections.pop(self.device_id, None)
-            # Unregister the MediaMTX path so stale paths don't accumulate
-            token = await store.get_stream_token(self.device_id)
-            if token:
-                await _unregister_mediamtx_path(token)
             await store.remove_device(self.device_id)
         self.writer.close()
         try:

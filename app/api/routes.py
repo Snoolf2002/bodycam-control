@@ -62,40 +62,58 @@ async def rtsp_auth(request: MediaMTXAuthRequest):
     """
     MediaMTX external authentication webhook.
 
-    Validates the RTSP path token in two modes:
-      1. HMAC token (issued by our platform) – cryptographically verified.
-      2. Legacy CMSv6 token (Base64 CSV with device ID) – checked against
-         the Redis active-device registry.
+    Called for both publish (camera pushing RTSP to port 6604) and read
+    (browser/HLS client requesting the stream).
+
+    Path formats accepted:
+      1. Base64 CMSv6 path  – the format cameras use when pushing RTSP directly
+         to MediaMTX (OEJGNkRF... → SESSION_TOKEN,3,device_id,...).
+      2. HMAC dot-token     – issued by our platform for future pull-based use.
     """
     path = request.path.strip("/")
+    action = request.action  # "publish" or "read"
+
     if not path:
         raise HTTPException(status_code=401, detail="Empty path")
 
     store = get_device_store()
 
-    # ── Try HMAC token first ─────────────────────────────────────────────
+    # ── 1. Base64 CMSv6 path (camera native push format) ────────────────────
+    try:
+        # Base64 decode; pad to multiple of 4 if needed
+        padded = path + "=" * (4 - len(path) % 4)
+        decoded = base64.b64decode(padded).decode("utf-8")
+        parts = decoded.split(",")
+        if len(parts) >= 3:
+            device_id = parts[2].strip()
+            if action == "publish":
+                # Camera is publishing its own stream — always allow.
+                # (Device may not be in Redis yet when the RTSP push arrives.)
+                logger.info("Base64 publish auth OK for device %s", device_id)
+                return {"status": "ok"}
+            else:
+                # Browser/HLS read — require device to be currently online.
+                if await store.is_online(device_id):
+                    logger.info("Base64 read auth OK for device %s", device_id)
+                    return {"status": "ok"}
+                logger.warning("Base64 read rejected — device %s offline", device_id)
+                raise HTTPException(status_code=401, detail="Device offline")
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Not a valid base64 path, fall through
+
+    # ── 2. HMAC dot-token (platform-issued, for pull-based compatibility) ────
     device_id = verify_stream_token(path, settings.SECRET_KEY)
     if device_id:
         if await store.is_online(device_id):
-            logger.info("HMAC auth OK for device %s", device_id)
+            logger.info("HMAC auth OK for device %s (action=%s)", device_id, action)
             return {"status": "ok"}
         raise HTTPException(status_code=401, detail="Device offline")
 
-    # ── Fallback: legacy Base64 CMSv6 token ──────────────────────────────
-    try:
-        decoded = base64.b64decode(path).decode("utf-8")
-        parts = decoded.split(",")
-        if len(parts) >= 3:
-            device_id = parts[2]
-            if await store.is_online(device_id):
-                logger.info("Legacy token auth OK for device %s", device_id)
-                return {"status": "ok"}
-            raise HTTPException(status_code=401, detail="Device offline")
-    except Exception:
-        pass
-
-    logger.warning("Auth rejected for path=%s", path[:60])
+    logger.warning("Auth rejected for path=%.60s action=%s", path, action)
     raise HTTPException(status_code=401, detail="Invalid token")
+
 
 
 @router.get("/devices")
