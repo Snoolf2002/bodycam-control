@@ -38,49 +38,6 @@ active_connections: Dict[str, "DeviceConnection"] = {}
 
 _SESSION_TOKEN = "8BF6DE248647478581A01D6A42B2E452"
 
-# MediaMTX management API endpoint (internal Docker network)
-MEDIAMTX_API = "http://mediamtx:9997"
-
-
-async def _register_mediamtx_path(token: str) -> None:
-    """
-    Dynamically create a stream path in MediaMTX via its REST API.
-    MediaMTX will pull from rtsp://app:6609/<token> on demand.
-    """
-    url = f"{MEDIAMTX_API}/v3/config/paths/add/{token}"
-    payload = {
-        "source": f"rtsp://app:6609/{token}",
-        "sourceOnDemand": True,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code in (200, 201):
-                logger.info("[MEDIAMTX] Path registered: ...%s", token[-20:])
-            else:
-                logger.warning(
-                    "[MEDIAMTX] Failed to register path (status=%s): %s",
-                    resp.status_code, resp.text[:200],
-                )
-    except Exception as exc:
-        logger.warning("[MEDIAMTX] Could not register path: %s", exc)
-
-
-async def _unregister_mediamtx_path(token: str) -> None:
-    """
-    Remove a dynamically registered stream path from MediaMTX.
-    Called on device disconnect or before re-registering with a new token.
-    """
-    url = f"{MEDIAMTX_API}/v3/config/paths/remove/{token}"
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.delete(url)
-            logger.info(
-                "[MEDIAMTX] Path unregistered: ...%s (status=%s)",
-                token[-20:], resp.status_code,
-            )
-    except Exception as exc:
-        logger.warning("[MEDIAMTX] Could not unregister path: %s", exc)
 
 
 def generate_dynamic_rtsp_path(device_id: str) -> str:

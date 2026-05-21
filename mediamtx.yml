@@ -7,9 +7,6 @@
 rtspAddress: :6604
 
 # ── REST Management API ───────────────────────────────────────────────────────
-# The FastAPI app calls this API to register / unregister per-device stream
-# paths dynamically (with the real token as the path name and the RTSP proxy
-# as the pull source). This replaces the broken $MTX_PATH wildcard approach.
 api: yes
 apiAddress: :9997
 
@@ -27,6 +24,10 @@ hlsAddress: :8888
 externalAuthenticationURL: http://app:8001/webhook/rtsp_auth
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-# No wildcard source here. Per-device paths are registered dynamically by the
-# app via the MediaMTX REST API when a camera connects (with each path pointing
-# to rtsp://app:6609/<token>). This is the correct way to pass the real path.
+paths:
+  # Dynamically capture the stream path/token using a regular expression.
+  # When a client requests HLS (e.g., :8888/<token>/index.m3u8), MediaMTX matches
+  # it to this rule and pulls the stream from our TCP-RTSP proxy (port 6609) on demand.
+  "~^(.+)$":
+    source: rtsp://app:6609/$G1
+    sourceOnDemand: yes
