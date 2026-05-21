@@ -28,24 +28,24 @@ The system is composed of four Docker services that communicate over an internal
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Docker Network                          │
 │                                                                 │
-│  ┌─────────────┐   TCP:6608   ┌──────────────────────────────┐ │
-│  │  Bodycam    │─────────────▶│  app (FastAPI + TCP Gateway) │ │
-│  │  Device     │              │  - REST API      :8001        │ │
-│  │  (Camera)   │   RTSP push  │  - Telemetry GW  :6608        │ │
-│  └─────────────┘──────────┐   └──────────┬───────────────────┘ │
+│  ┌─────────────┐   TCP:6608   ┌──────────────────────────────┐  │
+│  │  Bodycam    │─────────────▶│  app (FastAPI + TCP Gateway) │  │
+│  │  Device     │              │  - REST API      :8001       │  │
+│  │  (Camera)   │   RTSP push  │  - Telemetry GW  :6608       │  │
+│  └─────────────┘──────────┐   └──────────┬───────────────────┘  │
 │                           │              │ Webhook (auth)       │
 │                           │   TCP:6604   ▼                      │
-│                           │   ┌──────────────────────────────┐ │
-│                           └──▶│  mediamtx                    │ │
-│                               │  - RTSP ingest   :6604        │ │
-│                               │  - HLS playback  :8888        │ │
-│                               │  - WebRTC play   :8889        │ │
-│                               └──────────────────────────────┘ │
+│                           │   ┌──────────────────────────────┐  │
+│                           └──▶│  mediamtx                    │  │
+│                               │  - RTSP ingest   :6604       │  │
+│                               │  - HLS playback  :8888       │  │
+│                               │  - WebRTC play   :8889       │  │
+│                               └──────────────────────────────┘  │
 │                                                                 │
-│  ┌──────────────┐            ┌──────────────────────────────┐  │
-│  │  redis:7     │            │  timescaledb (PostgreSQL 16)  │  │
-│  │  :6379       │            │  :5432                        │  │
-│  └──────────────┘            └──────────────────────────────┘  │
+│  ┌──────────────┐            ┌──────────────────────────────┐   │
+│  │  redis:7     │            │  timescaledb (PostgreSQL 16) │   │
+│  │  :6379       │            │  :5432                       │   │
+│  └──────────────┘            └──────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -164,7 +164,7 @@ Camera                  app:6608 (TCP Gateway)          Redis
   │                             │── Protocol detected      │
   │                             │── register_device() ────▶│
   │                             │   store_stream_token()──▶│
-  │◀── ACK (ASCII or 0x8100) ──│                          │
+  │◀── ACK (ASCII or 0x8100) ── │                          │
   │                             │── check pending cmds ───▶│
   │                             │                          │
 ```
@@ -178,7 +178,7 @@ Camera                  app:6608                     TimescaleDB
   │                         │── parse coordinates         │
   │                         │── heartbeat() → Redis TTL   │
   │                         │── INSERT gps_tracks ───────▶│
-  │◀── ACK ────────────────│                             │
+  │◀── ACK ──────────────── │                             │
 ```
 
 ### Stream Start Flow (JT/T 1078 Push Model)
@@ -189,17 +189,17 @@ Browser Dashboard       app:8001              Camera (via :6608)     mediamtx:66
       │─ POST /devices/{id}/│                         │                    │
       │  start-stream ─────▶│                         │                    │
       │                     │── send 0x9101 cmd ─────▶│                    │
-      │                     │   (ip, port=6604,        │                    │
-      │                     │    channel=1, ...)        │                    │
-      │◀─ 200 OK ──────────│                         │                    │
+      │                     │   (ip, port=6604,       │                    │
+      │                     │    channel=1, ...)      │                    │
+      │◀─ 200 OK ────────── │                         │                    │
       │                     │                         │── RTSP ANNOUNCE ──▶│
       │                     │                         │   (Base64 path)    │
       │                     │◀───────────── webhook: POST /webhook/rtsp_auth
-      │                     │── 200 OK ──────────────────────────────────▶│
+      │                     │── 200 OK ──────────────────────────────────▶ │
       │                     │                                              │
       │── GET :8888/{path}/ │                                              │
-      │   index.m3u8 ──────────────────────────────────────────────────▶│
-      │◀─ HLS segments ────────────────────────────────────────────────│
+      │   index.m3u8 ──────────────────────────────────────────────────▶   │
+      │◀─ HLS segments ────────────────────────────────────────────────    │
 ```
 
 ### RTSP Authentication Flow (MediaMTX → `app`)
@@ -214,7 +214,7 @@ mediamtx                          app:8001/webhook/rtsp_auth
     │                                          │   if action=publish → always OK
     │                                          │   if action=read → check Redis online
     │                                          │
-    │◀── 200 {"status":"ok"} ─────────────────│
+    │◀── 200 {"status":"ok"} ───────────────── │
 ```
 
 ---
