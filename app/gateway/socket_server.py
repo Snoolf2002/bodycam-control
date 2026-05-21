@@ -451,6 +451,8 @@ async def _pump_c_to_m(
                     chunk = chunk[end_idx + 1:]
             if chunk:
                 chunk = chunk.replace(search_bytes, replace_bytes)
+                # Translate 127.0.0.1:6604 back to app:6609 so MediaMTX is happy
+                chunk = chunk.replace(b"127.0.0.1:6604", b"app:6609")
                 m_writer.write(chunk)
                 await m_writer.drain()
     except Exception as exc:
@@ -478,6 +480,8 @@ async def _pump_m_to_c(
             if not chunk:
                 break
             chunk = chunk.replace(search_bytes, replace_bytes)
+            # Translate MediaMTX internal address to port 6604 that camera expects
+            chunk = chunk.replace(b"app:6609", b"127.0.0.1:6604")
             c_writer.write(chunk)
             await c_writer.drain()
     except Exception as exc:
@@ -591,10 +595,14 @@ async def start_proxy_server(host: str, port: int) -> None:
             # - The camera expects the fully-padded Base64 path.
             camera_path = conn.b64_path + "=" * (4 - len(conn.b64_path) % 4)
 
-            # Forward the initial request bytes to the camera (with restored base64 padding)
+            # Forward the initial request bytes to the camera (with restored base64 padding and port translation)
             modified_header_bytes = header_bytes.replace(
                 requested_path.encode('utf-8'),
                 camera_path.encode('utf-8')
+            )
+            modified_header_bytes = modified_header_bytes.replace(
+                b"app:6609",
+                b"127.0.0.1:6604"
             )
             conn.writer.write(modified_header_bytes)
             await conn.writer.drain()
