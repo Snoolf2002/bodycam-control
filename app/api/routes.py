@@ -58,9 +58,9 @@ class LocationInfo(BaseModel):
 class StartStreamRequest(BaseModel):
     ip: str
     port: int = 6604
-    channel: int = 0
+    channel: int = 1
     data_type: int = 0  # 0: Audio/Video, 1: Video, 2: Voice, etc.
-    stream_type: int = 0  # 0: Main stream, 1: Sub-stream
+    stream_type: int = 1  # 0: Main stream, 1: Sub-stream
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -230,7 +230,7 @@ async def start_device_stream(device_id: str, request: StartStreamRequest):
                 "type": "start-stream",
                 "ip": request.ip,
                 "port": request.port,
-                "channel": request.channel,
+                "channel": request.channel or 1,
                 "data_type": request.data_type,
                 "stream_type": request.stream_type,
             }
@@ -255,7 +255,7 @@ async def start_device_stream(device_id: str, request: StartStreamRequest):
                 [
                     request.ip,
                     request.port,
-                    request.channel,
+                    request.channel or 1,
                     request.data_type,
                     request.stream_type,
                 ]
@@ -283,7 +283,7 @@ async def start_device_stream(device_id: str, request: StartStreamRequest):
             ip=request.ip,
             tcp_port=request.port,
             udp_port=0,  # TCP mode
-            channel=request.channel,
+            channel=request.channel or 1,
             data_type=request.data_type,
             stream_type=request.stream_type,
         )

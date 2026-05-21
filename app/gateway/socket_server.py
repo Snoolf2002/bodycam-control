@@ -206,9 +206,9 @@ class DeviceConnection:
             if cmd_type == "start-stream":
                 ip = cmd.get("ip", "127.0.0.1")
                 port = cmd.get("port", 6604)
-                channel = cmd.get("channel", 1)
+                channel = cmd.get("channel") or 1
                 data_type = cmd.get("data_type", 0)
-                stream_type = cmd.get("stream_type", 0)
+                stream_type = cmd.get("stream_type") if cmd.get("stream_type") is not None else 1
                 
                 if self.is_ascii:
                     packet_str = await self.send_ascii_command(
