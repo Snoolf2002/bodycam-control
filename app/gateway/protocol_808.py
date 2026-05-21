@@ -74,6 +74,24 @@ def build_packet(
     return b'\x7e' + escaped + b'\x7e'
 
 
+def build_9101_body(
+    ip: str, tcp_port: int, udp_port: int, channel: int, data_type: int, stream_type: int
+) -> bytes:
+    """Build the body of 0x9101 Real-time Audio/Video Transmission Request."""
+    ip_bytes = ip.encode("ascii")
+    ip_len = len(ip_bytes)
+    # Format:
+    # B: IP address length (1 byte)
+    # {ip_len}s: IP address (ip_len bytes)
+    # H: Video server TCP port (2 bytes)
+    # H: Video server UDP port (2 bytes)
+    # B: Logical channel number (1 byte)
+    # B: Data type (1 byte)
+    # B: Stream type (1 byte)
+    fmt = f">B{ip_len}sHHBBB"
+    return struct.pack(fmt, ip_len, ip_bytes, tcp_port, udp_port, channel, data_type, stream_type)
+
+
 # ── Parsed data structures ──────────────────────────────────────────────────
 
 @dataclass

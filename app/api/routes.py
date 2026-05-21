@@ -55,6 +55,14 @@ class LocationInfo(BaseModel):
     time: str
 
 
+class StartStreamRequest(BaseModel):
+    ip: str
+    port: int = 6604
+    channel: int = 0
+    data_type: int = 0  # 0: Audio/Video, 1: Video, 2: Voice, etc.
+    stream_type: int = 0  # 0: Main stream, 1: Sub-stream
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/webhook/rtsp_auth")
@@ -204,3 +212,57 @@ async def diagnose_connectivity():
             results[f"tcp_{host}_{port}"] = {"status": "error", "message": str(e)}
 
     return results
+
+
+@router.post("/devices/{device_id}/start-stream")
+async def start_device_stream(device_id: str, request: StartStreamRequest):
+    """
+    Send JT/T 1078 0x9101 Real-time Audio/Video Transmission Request to the device.
+    """
+    from app.gateway.socket_server import active_connections
+    from app.gateway.protocol_808 import build_9101_body
+
+    conn = active_connections.get(device_id)
+    if not conn:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Device connection not found or offline: {device_id}",
+        )
+
+    try:
+        body = build_9101_body(
+            ip=request.ip,
+            tcp_port=request.port,
+            udp_port=0,  # TCP mode
+            channel=request.channel,
+            data_type=request.data_type,
+            stream_type=request.stream_type,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to build 0x9101 body payload: {exc}",
+        )
+
+    try:
+        seq = await conn.send_command(0x9101, body)
+        logger.info(
+            "[%s] Dispatched 0x9101 command (seq=%d, ip=%s, port=%d)",
+            device_id,
+            seq,
+            request.ip,
+            request.port,
+        )
+        return {
+            "status": "ok",
+            "message": "Start-stream command sent successfully",
+            "device_id": device_id,
+            "msg_seq": seq,
+        }
+    except Exception as exc:
+        logger.error("[%s] Failed to send 0x9101 command: %s", device_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to transmit command to the device: {exc}",
+        )
+

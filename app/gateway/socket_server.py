@@ -138,6 +138,21 @@ class DeviceConnection:
         self.b64_path: Optional[str] = None    # RTSP path the camera expects
         self.proxying: bool = False             # True when proxy has taken over the socket
         self.handle_task: Optional[asyncio.Task] = None  # Reference for cancellation
+        self.seq_num: int = 0
+
+    def next_seq(self) -> int:
+        """Get the next sequence number (0-65535)."""
+        seq = self.seq_num
+        self.seq_num = (self.seq_num + 1) & 0xFFFF
+        return seq
+
+    async def send_command(self, msg_id: int, body: bytes) -> int:
+        """Send a JT/T 808/1078 command to the device, returning the sequence number used."""
+        seq = self.next_seq()
+        pkt = build_packet(msg_id, self.phone_bcd, seq, body)
+        self.writer.write(pkt)
+        await self.writer.drain()
+        return seq
 
     # ── Main loop ────────────────────────────────────────────────────────
 
