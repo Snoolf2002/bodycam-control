@@ -19,12 +19,16 @@ class Settings(BaseSettings):
     # HMAC secret for stream token signing
     SECRET_KEY: str = "CHANGE-ME-IN-PRODUCTION"
 
+    # Session Token for RTSP matching (loaded from environment)
+    SESSION_TOKEN: str = ""
+
     # API
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8001
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()

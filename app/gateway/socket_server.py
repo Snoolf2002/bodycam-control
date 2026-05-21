@@ -36,13 +36,10 @@ logger = logging.getLogger(__name__)
 # Global registry: device_id -> DeviceConnection (keeps the live socket accessible to the proxy)
 active_connections: Dict[str, "DeviceConnection"] = {}
 
-_SESSION_TOKEN = "8BF6DE248647478581A01D6A42B2E452"
-
-
 
 def generate_dynamic_rtsp_path(device_id: str) -> str:
     """Generate the Base64 RTSP path the camera firmware expects (stripped of '=' for MediaMTX compatibility)."""
-    raw_payload = f"{_SESSION_TOKEN},3,{device_id},0,1,0,0,0"
+    raw_payload = f"{settings.SESSION_TOKEN},3,{device_id},0,1,0,0,0"
     return base64.b64encode(raw_payload.encode("utf-8")).decode("utf-8").rstrip("=")
 
 

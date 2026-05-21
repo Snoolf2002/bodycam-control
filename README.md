@@ -499,7 +499,7 @@ The stream token is a **Base64-encoded CMSv6 path** that uniquely identifies eac
 
 **Generation:**
 ```python
-SESSION_TOKEN = "8BF6DE248647478581A01D6A42B2E452"  # Fixed session key
+# SESSION_TOKEN is loaded from environment variables (.env)
 raw_payload = f"{SESSION_TOKEN},3,{device_id},0,1,0,0,0"
 b64_path = base64.b64encode(raw_payload.encode()).decode().rstrip("=")
 ```
