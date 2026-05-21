@@ -41,9 +41,9 @@ _SESSION_TOKEN = "8BF6DE248647478581A01D6A42B2E452"
 
 
 def generate_dynamic_rtsp_path(device_id: str) -> str:
-    """Generate the Base64 RTSP path the camera firmware expects."""
+    """Generate the Base64 RTSP path the camera firmware expects (stripped of '=' for MediaMTX compatibility)."""
     raw_payload = f"{_SESSION_TOKEN},3,{device_id},0,1,0,0,0"
-    return base64.b64encode(raw_payload.encode("utf-8")).decode("utf-8")
+    return base64.b64encode(raw_payload.encode("utf-8")).decode("utf-8").rstrip("=")
 
 
 def parse_ascii_location(segments: list[str]) -> Optional[dict]:
@@ -576,8 +576,10 @@ async def start_proxy_server(host: str, port: int) -> None:
                 # Give the telemetry loop a moment to exit cleanly
                 await asyncio.sleep(0.05)
 
-            # Forward the initial request bytes to the camera
-            conn.writer.write(header_bytes)
+            # Forward the initial request bytes to the camera (with restored base64 padding)
+            padded_path = requested_path + "=" * (4 - len(requested_path) % 4)
+            modified_header_bytes = header_bytes.replace(requested_path.encode('utf-8'), padded_path.encode('utf-8'))
+            conn.writer.write(modified_header_bytes)
             await conn.writer.drain()
 
             # Bidirectional pipe: camera ↔ MediaMTX
