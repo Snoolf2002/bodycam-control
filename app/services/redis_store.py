@@ -60,3 +60,21 @@ class DeviceStore:
         if raw is None:
             return None
         return raw.decode() if isinstance(raw, bytes) else raw
+
+    async def queue_command(self, device_id: str, command_data: dict) -> None:
+        await self.redis.set(
+            f"command:pending:{device_id}",
+            json.dumps(command_data),
+            ex=300,
+        )
+
+    async def get_pending_command(self, device_id: str) -> Optional[dict]:
+        raw = await self.redis.get(f"command:pending:{device_id}")
+        if raw is None:
+            return None
+        decoded = raw.decode() if isinstance(raw, bytes) else raw
+        return json.loads(decoded)
+
+    async def clear_pending_command(self, device_id: str) -> None:
+        await self.redis.delete(f"command:pending:{device_id}")
+

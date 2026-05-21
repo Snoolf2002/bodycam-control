@@ -190,6 +190,65 @@ class DeviceConnection:
         await self.writer.drain()
         return packet
 
+    async def check_and_send_pending_commands(self, store) -> None:
+        """Check if there are any queued commands for this device, and dispatch them."""
+        if not self.device_id:
+            return
+
+        cmd = await store.get_pending_command(self.device_id)
+        if not cmd:
+            return
+
+        logger.info("[%s] Found queued command: %s", self.device_id, cmd)
+        cmd_type = cmd.get("type")
+        
+        try:
+            if cmd_type == "start-stream":
+                ip = cmd.get("ip", "127.0.0.1")
+                port = cmd.get("port", 6604)
+                channel = cmd.get("channel", 1)
+                data_type = cmd.get("data_type", 0)
+                stream_type = cmd.get("stream_type", 0)
+                
+                if self.is_ascii:
+                    packet_str = await self.send_ascii_command(
+                        "9101",
+                        [
+                            ip,
+                            port,
+                            channel,
+                            data_type,
+                            stream_type,
+                        ]
+                    )
+                    logger.info(
+                        "[%s] Dispatched ASCII 9101 command from queue: %s",
+                        self.device_id,
+                        packet_str,
+                    )
+                else:
+                    from app.gateway.protocol_808 import build_9101_body
+                    body = build_9101_body(
+                        ip=ip,
+                        tcp_port=port,
+                        udp_port=0,
+                        channel=channel,
+                        data_type=data_type,
+                        stream_type=stream_type,
+                    )
+                    seq = await self.send_command(0x9101, body)
+                    logger.info(
+                        "[%s] Dispatched 0x9101 command from queue (seq=%d, ip=%s, port=%d)",
+                        self.device_id,
+                        seq,
+                        ip,
+                        port,
+                    )
+                # Success, clear the pending command
+                await store.clear_pending_command(self.device_id)
+        except Exception as exc:
+            logger.error("[%s] Failed to send queued command: %s", self.device_id, exc)
+
     # ── Main loop ────────────────────────────────────────────────────────
 
     async def handle(self) -> None:
@@ -292,9 +351,11 @@ class DeviceConnection:
                     # the HLS URL the dashboard needs is /8888/<b64_path>/index.m3u8.
                     await store.store_stream_token(self.device_id, self.b64_path)
                     logger.info("[%s] ASCII Device registered successfully", self.device_id)
+                    await self.check_and_send_pending_commands(store)
                 else:
                     # Update heartbeat
                     await store.heartbeat(self.device_id)
+                    await self.check_and_send_pending_commands(store)
                 
                 # Check if it has GPS coordinates
                 loc_data = parse_ascii_location(segments)
@@ -413,16 +474,19 @@ class DeviceConnection:
         self.writer.write(build_packet(0x8100, self.phone_bcd, pkt.msg_seq, body))
         await self.writer.drain()
         logger.info("[%s] Registered successfully (path=%s...)", self.device_id, self.b64_path[:16])
+        await self.check_and_send_pending_commands(store)
 
     async def _on_auth(self, pkt: ParsedPacket, store) -> None:
         logger.info("[%s] Authentication from %s", self.device_id, self.addr)
         await store.register_device(self.device_id, self.addr)
         await self._ack(pkt, result=0)
+        await self.check_and_send_pending_commands(store)
 
     async def _on_heartbeat(self, pkt: ParsedPacket, store) -> None:
         logger.debug("[%s] Heartbeat", self.device_id)
         await store.heartbeat(self.device_id)
         await self._ack(pkt, result=0)
+        await self.check_and_send_pending_commands(store)
 
     async def _on_location(self, pkt: ParsedPacket, store) -> None:
         try:
@@ -461,6 +525,7 @@ class DeviceConnection:
             logger.error("[%s] DB write failed: %s", self.device_id, exc)
 
         await self._ack(pkt, result=0)
+        await self.check_and_send_pending_commands(store)
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -479,7 +544,7 @@ class DeviceConnection:
         logger.info("[%s] Connection closed (device=%s)", self.addr, self.device_id)
         if self.device_id:
             active_connections.pop(self.device_id, None)
-            await store.remove_device(self.device_id)
+            # Do NOT call store.remove_device so the status persists in Redis until TTL expires
         self.writer.close()
         try:
             await self.writer.wait_closed()
@@ -684,11 +749,7 @@ async def start_proxy_server(host: str, port: int) -> None:
             if conn:
                 conn.proxying = False
                 active_connections.pop(device_id, None)
-                store = get_device_store()
-                try:
-                    await store.remove_device(device_id)
-                except Exception:
-                    pass
+                # Do NOT call store.remove_device so the status persists in Redis until TTL expires
                 conn.writer.close()
             m_writer.close()
             logger.info("[PROXY] Stream ended for device=%s", device_id)

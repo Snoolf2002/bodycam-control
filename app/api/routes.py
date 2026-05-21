@@ -222,12 +222,31 @@ async def start_device_stream(device_id: str, request: StartStreamRequest):
     from app.gateway.socket_server import active_connections
     from app.gateway.protocol_808 import build_9101_body
 
+    store = get_device_store()
     conn = active_connections.get(device_id)
     if not conn:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Device connection not found or offline: {device_id}",
-        )
+        if await store.is_online(device_id):
+            cmd_data = {
+                "type": "start-stream",
+                "ip": request.ip,
+                "port": request.port,
+                "channel": request.channel,
+                "data_type": request.data_type,
+                "stream_type": request.stream_type,
+            }
+            await store.queue_command(device_id, cmd_data)
+            logger.info("[%s] Queued start-stream command in Redis (device offline but registered)", device_id)
+            return {
+                "status": "queued",
+                "message": "Start-stream command queued, waiting for device to connect",
+                "device_id": device_id,
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Device connection not found or offline: {device_id}",
+            )
+
 
     if getattr(conn, "is_ascii", False):
         try:
