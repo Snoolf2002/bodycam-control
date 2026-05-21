@@ -433,8 +433,12 @@ async def _pump_c_to_m(
     c_reader: asyncio.StreamReader,
     m_writer: asyncio.StreamWriter,
     device_id: str,
+    search_path: str,
+    replace_path: str,
 ) -> None:
-    """Pipe raw H.264 bytes from the camera socket up to MediaMTX."""
+    """Pipe raw H.264 bytes from the camera socket up to MediaMTX, translating paths."""
+    search_bytes = search_path.encode('utf-8')
+    replace_bytes = replace_path.encode('utf-8')
     try:
         while True:
             chunk = await c_reader.read(65536)
@@ -446,6 +450,7 @@ async def _pump_c_to_m(
                 if end_idx != -1:
                     chunk = chunk[end_idx + 1:]
             if chunk:
+                chunk = chunk.replace(search_bytes, replace_bytes)
                 m_writer.write(chunk)
                 await m_writer.drain()
     except Exception as exc:
@@ -461,13 +466,18 @@ async def _pump_m_to_c(
     m_reader: asyncio.StreamReader,
     c_writer: asyncio.StreamWriter,
     device_id: str,
+    search_path: str,
+    replace_path: str,
 ) -> None:
-    """Pipe RTSP commands from MediaMTX down to the camera socket."""
+    """Pipe RTSP commands from MediaMTX down to the camera socket, translating paths."""
+    search_bytes = search_path.encode('utf-8')
+    replace_bytes = replace_path.encode('utf-8')
     try:
         while True:
             chunk = await m_reader.read(65536)
             if not chunk:
                 break
+            chunk = chunk.replace(search_bytes, replace_bytes)
             c_writer.write(chunk)
             await c_writer.drain()
     except Exception as exc:
@@ -576,16 +586,23 @@ async def start_proxy_server(host: str, port: int) -> None:
                 # Give the telemetry loop a moment to exit cleanly
                 await asyncio.sleep(0.05)
 
+            # Define translation paths:
+            # - MediaMTX requests using `requested_path` (which can be HMAC or unpadded Base64)
+            # - The camera expects the fully-padded Base64 path.
+            camera_path = conn.b64_path + "=" * (4 - len(conn.b64_path) % 4)
+
             # Forward the initial request bytes to the camera (with restored base64 padding)
-            padded_path = requested_path + "=" * (4 - len(requested_path) % 4)
-            modified_header_bytes = header_bytes.replace(requested_path.encode('utf-8'), padded_path.encode('utf-8'))
+            modified_header_bytes = header_bytes.replace(
+                requested_path.encode('utf-8'),
+                camera_path.encode('utf-8')
+            )
             conn.writer.write(modified_header_bytes)
             await conn.writer.drain()
 
             # Bidirectional pipe: camera ↔ MediaMTX
             await asyncio.gather(
-                _pump_c_to_m(conn.reader, m_writer, conn.device_id),
-                _pump_m_to_c(m_reader, conn.writer, conn.device_id),
+                _pump_c_to_m(conn.reader, m_writer, conn.device_id, camera_path, requested_path),
+                _pump_m_to_c(m_reader, conn.writer, conn.device_id, requested_path, camera_path),
                 return_exceptions=True,
             )
 
