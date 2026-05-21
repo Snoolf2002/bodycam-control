@@ -284,7 +284,7 @@ Dispatches the JT/T 1078 `0x9101` Real-time Audio/Video Transmission Request to 
 **Request Body:**
 ```json
 {
-  "ip": "95.182.117.186",
+  "ip": "YOUR_SERVER_PUBLIC_IP",
   "port": 6604,
   "channel": 1,
   "data_type": 0,
