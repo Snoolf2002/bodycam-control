@@ -21,7 +21,8 @@ hlsAddress: :8888
 
 # ── Authentication ────────────────────────────────────────────────────────────
 # Every read/publish request is validated against the FastAPI webhook.
-externalAuthenticationURL: http://app:8001/webhook/rtsp_auth
+authMethod: http
+authHTTPAddress: http://app:8001/webhook/rtsp_auth
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:
