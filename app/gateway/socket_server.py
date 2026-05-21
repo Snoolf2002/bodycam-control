@@ -190,14 +190,14 @@ class DeviceConnection:
         await self.writer.drain()
         return packet
 
-    async def check_and_send_pending_commands(self, store) -> None:
+    async def check_and_send_pending_commands(self, store) -> bool:
         """Check if there are any queued commands for this device, and dispatch them."""
         if not self.device_id:
-            return
+            return False
 
         cmd = await store.get_pending_command(self.device_id)
         if not cmd:
-            return
+            return False
 
         logger.info("[%s] Found queued command: %s", self.device_id, cmd)
         cmd_type = cmd.get("type")
@@ -246,8 +246,10 @@ class DeviceConnection:
                     )
                 # Success, clear the pending command
                 await store.clear_pending_command(self.device_id)
+                return True
         except Exception as exc:
             logger.error("[%s] Failed to send queued command: %s", self.device_id, exc)
+        return False
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -338,6 +340,7 @@ class DeviceConnection:
                 # Extract and save phone field (often empty)
                 self.phone_ascii = segments[4] if len(segments) > 4 else ""
 
+                command_sent = False
                 # If device ID changes or is first registered
                 if self.device_id != device_id:
                     self.device_id = device_id
@@ -351,11 +354,11 @@ class DeviceConnection:
                     # the HLS URL the dashboard needs is /8888/<b64_path>/index.m3u8.
                     await store.store_stream_token(self.device_id, self.b64_path)
                     logger.info("[%s] ASCII Device registered successfully", self.device_id)
-                    await self.check_and_send_pending_commands(store)
+                    command_sent = await self.check_and_send_pending_commands(store)
                 else:
                     # Update heartbeat
                     await store.heartbeat(self.device_id)
-                    await self.check_and_send_pending_commands(store)
+                    command_sent = await self.check_and_send_pending_commands(store)
                 
                 # Check if it has GPS coordinates
                 loc_data = parse_ascii_location(segments)
@@ -400,7 +403,7 @@ class DeviceConnection:
 
                 # Respond with an ASCII ACK to keep the socket alive
                 cmd_type = segments[0][2:] if len(segments[0]) > 2 else ""
-                if cmd_type:
+                if cmd_type and not command_sent:
                     await self.send_ascii_ack(cmd_type)
             else:
                 logger.debug("[%s] Packet has only %d segments, skipping", self.addr, len(segments))
