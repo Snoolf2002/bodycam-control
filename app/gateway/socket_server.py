@@ -17,6 +17,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
+import httpx
+
 from app.gateway.protocol_808 import (
     PacketBuffer,
     ParsedPacket,
@@ -35,6 +37,50 @@ logger = logging.getLogger(__name__)
 active_connections: Dict[str, "DeviceConnection"] = {}
 
 _SESSION_TOKEN = "8BF6DE248647478581A01D6A42B2E452"
+
+# MediaMTX management API endpoint (internal Docker network)
+MEDIAMTX_API = "http://mediamtx:9997"
+
+
+async def _register_mediamtx_path(token: str) -> None:
+    """
+    Dynamically create a stream path in MediaMTX via its REST API.
+    MediaMTX will pull from rtsp://app:6609/<token> on demand.
+    """
+    url = f"{MEDIAMTX_API}/v3/config/paths/add/{token}"
+    payload = {
+        "source": f"rtsp://app:6609/{token}",
+        "sourceOnDemand": True,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code in (200, 201):
+                logger.info("[MEDIAMTX] Path registered: ...%s", token[-20:])
+            else:
+                logger.warning(
+                    "[MEDIAMTX] Failed to register path (status=%s): %s",
+                    resp.status_code, resp.text[:200],
+                )
+    except Exception as exc:
+        logger.warning("[MEDIAMTX] Could not register path: %s", exc)
+
+
+async def _unregister_mediamtx_path(token: str) -> None:
+    """
+    Remove a dynamically registered stream path from MediaMTX.
+    Called on device disconnect or before re-registering with a new token.
+    """
+    url = f"{MEDIAMTX_API}/v3/config/paths/remove/{token}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.delete(url)
+            logger.info(
+                "[MEDIAMTX] Path unregistered: ...%s (status=%s)",
+                token[-20:], resp.status_code,
+            )
+    except Exception as exc:
+        logger.warning("[MEDIAMTX] Could not unregister path: %s", exc)
 
 
 def generate_dynamic_rtsp_path(device_id: str) -> str:
@@ -228,10 +274,16 @@ class DeviceConnection:
                     active_connections[device_id] = self
                     logger.info("[%s] ASCII Device identified: %s (path=%s...)", self.addr, self.device_id, self.b64_path[:16])
                     await store.register_device(self.device_id, self.addr)
-                    
-                    # Generate and store stream token so they can watch HLS/WebRTC
+
+                    # Unregister any stale path from a previous session
+                    old_token = await store.get_stream_token(self.device_id)
+                    if old_token:
+                        await _unregister_mediamtx_path(old_token)
+
+                    # Generate new token, persist in Redis, register path in MediaMTX
                     token = generate_stream_token(self.device_id, settings.SECRET_KEY)
                     await store.store_stream_token(self.device_id, token)
+                    await _register_mediamtx_path(token)
                     logger.info("[%s] ASCII Device registered successfully with stream token", self.device_id)
                 else:
                     # Update heartbeat
@@ -339,9 +391,15 @@ class DeviceConnection:
         active_connections[self.device_id] = self
         await store.register_device(self.device_id, self.addr)
 
-        # Generate HMAC stream token and persist in Redis
+        # Unregister any stale path from a previous session
+        old_token = await store.get_stream_token(self.device_id)
+        if old_token:
+            await _unregister_mediamtx_path(old_token)
+
+        # Generate new HMAC stream token, persist in Redis, register path in MediaMTX
         token = generate_stream_token(self.device_id, settings.SECRET_KEY)
         await store.store_stream_token(self.device_id, token)
+        await _register_mediamtx_path(token)
 
         # Reply 0x8100: seq(WORD) + result(BYTE=0 success) + auth_code
         auth_code = self.device_id.encode("ascii")
@@ -415,6 +473,10 @@ class DeviceConnection:
         logger.info("[%s] Connection closed (device=%s)", self.addr, self.device_id)
         if self.device_id:
             active_connections.pop(self.device_id, None)
+            # Unregister the MediaMTX path so stale paths don't accumulate
+            token = await store.get_stream_token(self.device_id)
+            if token:
+                await _unregister_mediamtx_path(token)
             await store.remove_device(self.device_id)
         self.writer.close()
         try:

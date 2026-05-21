@@ -2,12 +2,18 @@
 # MediaMTX Configuration – Bodycam Control Plane
 ###############################################################################
 
-# ── RTSP Ingestion ───────────────────────────────────────────────────────────
-# The RTSP proxy (port 6609) bridges camera sockets to MediaMTX on demand.
-# Cameras no longer push to MediaMTX directly; MediaMTX pulls via proxy.
+# ── RTSP Ingest ───────────────────────────────────────────────────────────────
+# Port used for direct RTSP pushes (kept open for future use / fallback).
 rtspAddress: :6604
 
-# ── Protocol Conversions ────────────────────────────────────────────────────
+# ── REST Management API ───────────────────────────────────────────────────────
+# The FastAPI app calls this API to register / unregister per-device stream
+# paths dynamically (with the real token as the path name and the RTSP proxy
+# as the pull source). This replaces the broken $MTX_PATH wildcard approach.
+api: yes
+apiAddress: :9997
+
+# ── Protocol Conversions ──────────────────────────────────────────────────────
 # WebRTC – low-latency browser playback
 webrtc: yes
 webrtcAddress: :8889
@@ -16,14 +22,11 @@ webrtcAddress: :8889
 hls: yes
 hlsAddress: :8888
 
-# ── Authentication ──────────────────────────────────────────────────────────
-# Every publish/read request is validated against the FastAPI backend
+# ── Authentication ────────────────────────────────────────────────────────────
+# Every read/publish request is validated against the FastAPI webhook.
 externalAuthenticationURL: http://app:8001/webhook/rtsp_auth
 
-# ── Path routing ────────────────────────────────────────────────────────────
-# For any stream path, MediaMTX will pull from our RTSP proxy on port 6609.
-# The $MTX_PATH placeholder passes the original stream path through.
-paths:
-  all:
-    source: rtsp://app:6609/$MTX_PATH
-    sourceOnDemand: yes
+# ── Paths ─────────────────────────────────────────────────────────────────────
+# No wildcard source here. Per-device paths are registered dynamically by the
+# app via the MediaMTX REST API when a camera connects (with each path pointing
+# to rtsp://app:6609/<token>). This is the correct way to pass the real path.
