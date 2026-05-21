@@ -13,7 +13,7 @@ def generate_stream_token(device_id: str, secret_key: str) -> str:
     signature = hmac.new(
         secret_key.encode(), message.encode(), hashlib.sha256
     ).hexdigest()
-    return f"{signature},{device_id},{timestamp},{nonce}"
+    return f"{signature}.{device_id}.{timestamp}.{nonce}"
 
 
 def verify_stream_token(
@@ -24,7 +24,7 @@ def verify_stream_token(
     Returns the device_id on success, None on failure.
     """
     try:
-        parts = token_string.split(",")
+        parts = token_string.split(".")
         if len(parts) < 4:
             return None
         signature, device_id, timestamp, nonce = (
@@ -42,3 +42,4 @@ def verify_stream_token(
         return None
     except Exception:
         return None
+

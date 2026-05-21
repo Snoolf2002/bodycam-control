@@ -148,3 +148,41 @@ async def get_device_location(device_id: str):
         logger.error("Location DB error for device %s: %s", device_id, exc)
         raise HTTPException(status_code=404, detail="No location data yet")
 
+
+@router.get("/diagnose")
+async def diagnose_connectivity():
+    """Diagnostic endpoint to inspect container DNS and TCP connectivity."""
+    import socket
+    import asyncio
+
+    results = {}
+
+
+    # Test DNS resolution
+    for host in ["app", "mediamtx", "redis", "timescaledb"]:
+        try:
+            ips = socket.gethostbyname_ex(host)
+            results[f"dns_{host}"] = {"status": "ok", "ip": ips[2]}
+        except Exception as e:
+            results[f"dns_{host}"] = {"status": "error", "message": str(e)}
+
+    # Test TCP connections
+    tcp_targets = [
+        ("mediamtx", 8888),
+        ("mediamtx", 8889),
+        ("app", 8001),
+        ("redis", 6379),
+    ]
+
+    for host, port in tcp_targets:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=2.0
+            )
+            writer.close()
+            await writer.wait_closed()
+            results[f"tcp_{host}_{port}"] = {"status": "ok"}
+        except Exception as e:
+            results[f"tcp_{host}_{port}"] = {"status": "error", "message": str(e)}
+
+    return results
