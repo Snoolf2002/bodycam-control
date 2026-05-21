@@ -45,22 +45,17 @@ async def lifespan(app: FastAPI):
         start_telemetry_server(settings.GATEWAY_HOST, settings.GATEWAY_PORT)
     )
 
-    logger.info("Starting RTSP proxy server on %s:%d …", settings.GATEWAY_HOST, settings.PROXY_PORT)
-    proxy_task = asyncio.create_task(
-        start_proxy_server(settings.GATEWAY_HOST, settings.PROXY_PORT)
-    )
+    # Proxy server disabled in favor of direct RTSP push to MediaMTX
+    # proxy_task = asyncio.create_task(
+    #     start_proxy_server(settings.GATEWAY_HOST, settings.PROXY_PORT)
+    # )
 
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────
     gateway_task.cancel()
-    proxy_task.cancel()
     try:
         await gateway_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await proxy_task
     except asyncio.CancelledError:
         pass
     await close_redis()

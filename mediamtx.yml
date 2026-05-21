@@ -25,9 +25,5 @@ externalAuthenticationURL: http://app:8001/webhook/rtsp_auth
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 paths:
-  # Dynamically capture the stream path/token using a regular expression.
-  # When a client requests HLS (e.g., :8888/<token>/index.m3u8), MediaMTX matches
-  # it to this rule and pulls the stream from our TCP-RTSP proxy (port 6609) on demand.
   "~^(.+)$":
-    source: rtsp://app:6609/$G1
-    sourceOnDemand: yes
+    source: publisher
